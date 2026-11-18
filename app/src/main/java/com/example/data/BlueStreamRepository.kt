@@ -23,7 +23,7 @@ import kotlinx.coroutines.tasks.await
 class BlueStreamRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth
-) {
+) : BlueStreamDataSource {
     constructor(context: Context) : this(
         FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
@@ -56,7 +56,7 @@ class BlueStreamRepository(
         throw error
     }
 
-    fun observePublicVideos(currentUserId: String): Flow<List<Video>> = flow {
+    override fun observePublicVideos(currentUserId: String): Flow<List<Video>> = flow {
         val path = "videos"
         emitAll(
             db.collection("videos")
@@ -73,7 +73,7 @@ class BlueStreamRepository(
         )
     }
 
-    fun observeUserVideos(userId: String): Flow<List<Video>> = flow {
+    override fun observeUserVideos(userId: String): Flow<List<Video>> = flow {
         val path = "videos"
         emitAll(
             db.collection("videos")
@@ -87,7 +87,7 @@ class BlueStreamRepository(
         )
     }
 
-    fun observeChannel(channelId: String, currentUserId: String): Flow<Channel?> = flow {
+    override fun observeChannel(channelId: String, currentUserId: String): Flow<Channel?> = flow {
         val path = "channels/$channelId"
         emitAll(
             db.collection("channels").document(channelId)
@@ -101,7 +101,7 @@ class BlueStreamRepository(
         )
     }
 
-    fun observeComments(videoId: String, currentUserId: String): Flow<List<VideoComment>> = flow {
+    override fun observeComments(videoId: String, currentUserId: String): Flow<List<VideoComment>> = flow {
         val path = "videos/$videoId/comments"
         emitAll(
             db.collection("videos").document(videoId)
@@ -116,7 +116,7 @@ class BlueStreamRepository(
         )
     }
 
-    fun observeLikes(userId: String): Flow<List<UserLike>> = flow {
+    override fun observeLikes(userId: String): Flow<List<UserLike>> = flow {
         val path = "users/$userId/likes"
         emitAll(
             db.collection("users").document(userId)
@@ -130,7 +130,7 @@ class BlueStreamRepository(
         )
     }
 
-    fun observeSubscriptions(userId: String): Flow<List<UserSubscription>> = flow {
+    override fun observeSubscriptions(userId: String): Flow<List<UserSubscription>> = flow {
         val path = "users/$userId/subscriptions"
         emitAll(
             db.collection("users").document(userId)
@@ -144,7 +144,7 @@ class BlueStreamRepository(
         )
     }
 
-    fun observeWatchLater(userId: String): Flow<List<WatchLaterItem>> = flow {
+    override fun observeWatchLater(userId: String): Flow<List<WatchLaterItem>> = flow {
         val path = "users/$userId/watch_later"
         emitAll(
             db.collection("users").document(userId)
@@ -158,8 +158,11 @@ class BlueStreamRepository(
         )
     }
 
-    suspend fun ensureChannelExists(user: FirebaseUser): Result<Channel> {
-        val uid = user.uid
+    override suspend fun ensureChannelExists(
+        uid: String,
+        displayName: String?,
+        avatarUrl: String?
+    ): Result<Channel> {
         val path = "channels/$uid"
         return try {
             val docRef = db.collection("channels").document(uid)
@@ -168,10 +171,10 @@ class BlueStreamRepository(
                 val channel = existing.toObject(Channel::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                 return Result.success(channel ?: Channel(id = uid, ownerId = uid))
             }
-            val rawName = (user.displayName?.takeIf { it.isNotBlank() } ?: "BlueStream Creator").take(60)
+            val rawName = (displayName?.takeIf { it.isNotBlank() } ?: "BlueStream Creator").take(60)
             val slug = rawName.lowercase().replace(Regex("[^a-z0-9]"), "").ifBlank { "creator" }.take(20)
             val handle = "@${slug}${uid.take(4).lowercase()}"
-            val avatar = user.photoUrl?.toString()?.take(500)
+            val avatar = avatarUrl?.take(500)
             val payload = mutableMapOf<String, Any>(
                 "ownerId" to uid,
                 "displayName" to rawName,
@@ -206,7 +209,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun updateChannelProfile(
+    override suspend fun updateChannelProfile(
         displayName: String,
         handle: String,
         bio: String
@@ -237,7 +240,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun uploadVideo(
+    override suspend fun uploadVideo(
         channel: Channel,
         title: String,
         description: String,
@@ -307,7 +310,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun updateVideoMetadata(
+    override suspend fun updateVideoMetadata(
         videoId: String,
         title: String,
         description: String,
@@ -341,7 +344,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun toggleFeaturedVideo(videoId: String, featured: Boolean): Result<Unit> {
+    override suspend fun toggleFeaturedVideo(videoId: String, featured: Boolean): Result<Unit> {
         val path = "videos/$videoId"
         return try {
             requireUserId()
@@ -361,7 +364,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun deleteVideo(video: Video): Result<Unit> {
+    override suspend fun deleteVideo(video: Video): Result<Unit> {
         val path = "videos/${video.id}"
         return try {
             val uid = requireUserId()
@@ -385,7 +388,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun incrementVideoView(video: Video): Result<Unit> {
+    override suspend fun incrementVideoView(video: Video): Result<Unit> {
         if (video.visibility != "public" || video.id.isBlank()) return Result.success(Unit)
         val path = "videos/${video.id}"
         return try {
@@ -402,7 +405,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun toggleLike(video: Video, currentlyLiked: Boolean): Result<Unit> {
+    override suspend fun toggleLike(video: Video, currentlyLiked: Boolean): Result<Unit> {
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val likePath = "users/$uid/likes/${video.id}"
         return try {
@@ -437,7 +440,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun toggleSubscription(
+    override suspend fun toggleSubscription(
         channelId: String,
         channelName: String,
         channelHandle: String,
@@ -489,7 +492,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun toggleWatchLater(video: Video, currentlySaved: Boolean): Result<Unit> {
+    override suspend fun toggleWatchLater(video: Video, currentlySaved: Boolean): Result<Unit> {
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
         val path = "users/$uid/watch_later/${video.id}"
         return try {
@@ -519,7 +522,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun addComment(
+    override suspend fun addComment(
         video: Video,
         text: String,
         authorName: String,
@@ -563,7 +566,7 @@ class BlueStreamRepository(
         }
     }
 
-    suspend fun deleteComment(video: Video, commentId: String): Result<Unit> {
+    override suspend fun deleteComment(video: Video, commentId: String): Result<Unit> {
         val path = "videos/${video.id}/comments/$commentId"
         return try {
             requireUserId()

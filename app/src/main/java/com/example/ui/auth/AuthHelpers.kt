@@ -14,6 +14,7 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
@@ -28,6 +29,25 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 private const val AUTH_TAG = "BlueStreamAuth"
+
+/**
+ * Safely checks whether Firebase was initialized (i.e., google-services.json was present
+ * and valid) without throwing IllegalStateException on startup.
+ */
+fun isFirebaseAvailable(context: Context): Boolean {
+    return runCatching {
+        if (FirebaseApp.getApps(context.applicationContext).isNotEmpty()) {
+            true
+        } else {
+            FirebaseApp.initializeApp(context.applicationContext) != null
+        }
+    }.getOrDefault(false)
+}
+
+fun getSafeFirebaseAuth(context: Context): FirebaseAuth? {
+    if (!isFirebaseAvailable(context)) return null
+    return runCatching { Firebase.auth }.getOrNull()
+}
 
 fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     val listener = FirebaseAuth.AuthStateListener { auth ->
@@ -44,13 +64,21 @@ fun attemptAutoSignIn(
     onUnauthenticated: () -> Unit,
     scope: CoroutineScope
 ) {
-    if (Firebase.auth.currentUser != null) {
+    val auth = getSafeFirebaseAuth(context)
+    if (auth == null) {
+        onUnauthenticated()
+        return
+    }
+    if (auth.currentUser != null) {
         onAuthSuccess()
         return
     }
     val clientId = try {
-        context.getString(R.string.default_web_client_id)
+        context.getString(R.string.default_web_client_id).takeIf { it.isNotBlank() }
     } catch (_: Exception) {
+        null
+    }
+    if (clientId == null) {
         onUnauthenticated()
         return
     }
@@ -67,7 +95,7 @@ fun attemptAutoSignIn(
             val cred = credentialManager.getCredential(context, request).credential
             if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
-                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
                 onAuthSuccess()
             } else {
                 onUnauthenticated()
@@ -86,10 +114,18 @@ fun onGoogleSignInClicked(
     scope: CoroutineScope,
     onAuthCancelled: () -> Unit = {}
 ) {
+    val auth = getSafeFirebaseAuth(context)
+    if (auth == null) {
+        onAuthError("Firebase is not configured on this build. Use Local Mode to continue.")
+        return
+    }
     val clientId = try {
-        context.getString(R.string.default_web_client_id)
+        context.getString(R.string.default_web_client_id).takeIf { it.isNotBlank() }
     } catch (_: Exception) {
-        onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
+        null
+    }
+    if (clientId == null) {
+        onAuthError("Google Sign-In client ID missing. Use Local Mode to continue.")
         return
     }
     val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
@@ -103,7 +139,7 @@ fun onGoogleSignInClicked(
             val cred = credentialManager.getCredential(activity, request).credential
             if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
-                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
                 onAuthSuccess()
             } else {
                 onAuthError("Unexpected credential type returned.")
@@ -119,6 +155,7 @@ fun onGoogleSignInClicked(
 }
 
 fun signOutUser(
+    context: Context,
     credentialManager: CredentialManager,
     scope: CoroutineScope,
     onSignOutComplete: () -> Unit = {}
@@ -130,7 +167,7 @@ fun signOutUser(
             } catch (e: Exception) {
                 Log.w(AUTH_TAG, "Failed to clear credential state: ${e.message}")
             } finally {
-                Firebase.auth.signOut()
+                runCatching { getSafeFirebaseAuth(context)?.signOut() }
                 onSignOutComplete()
             }
         }

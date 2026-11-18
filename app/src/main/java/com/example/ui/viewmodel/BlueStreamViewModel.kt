@@ -3,16 +3,14 @@ package com.example.ui.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.BlueStreamRepository
+import com.example.data.BlueStreamDataSource
 import com.example.data.Channel
-import com.example.data.PLATFORM_OWNER_EMAIL
 import com.example.data.UiState
 import com.example.data.UserLike
 import com.example.data.UserSubscription
 import com.example.data.Video
 import com.example.data.VideoComment
 import com.example.data.WatchLaterItem
-import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,13 +27,13 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class BlueStreamViewModel(
-    private val repository: BlueStreamRepository,
+    private val repository: BlueStreamDataSource,
     val currentUserId: String,
-    private val currentUser: FirebaseUser
+    private val userDisplayName: String?,
+    private val userAvatarUrl: String?,
+    val isPlatformOwner: Boolean,
+    val isLocalMode: Boolean = false
 ) : ViewModel() {
-
-    val isPlatformOwner: Boolean =
-        currentUser.email.equals(PLATFORM_OWNER_EMAIL, ignoreCase = true) && currentUser.isEmailVerified
 
     private val _selectedCategory = MutableStateFlow("All")
     val selectedCategory: StateFlow<String> = _selectedCategory.asStateFlow()
@@ -167,7 +165,7 @@ class BlueStreamViewModel(
 
     init {
         viewModelScope.launch {
-            repository.ensureChannelExists(currentUser)
+            repository.ensureChannelExists(currentUserId, userDisplayName, userAvatarUrl)
         }
     }
 
@@ -209,13 +207,14 @@ class BlueStreamViewModel(
         if (_isUploading.value) return
         viewModelScope.launch {
             _isUploading.value = true
-            val channel = myChannelState.value ?: repository.ensureChannelExists(currentUser).getOrNull()
+            val channel = myChannelState.value
+                ?: repository.ensureChannelExists(currentUserId, userDisplayName, userAvatarUrl).getOrNull()
                 ?: Channel(
                     id = currentUserId,
                     ownerId = currentUserId,
-                    displayName = currentUser.displayName ?: "BlueStream Creator",
+                    displayName = userDisplayName ?: "BlueStream Creator",
                     handle = "@creator",
-                    avatarUrl = currentUser.photoUrl?.toString()
+                    avatarUrl = userAvatarUrl
                 )
             val result = repository.uploadVideo(
                 channel = channel,
@@ -319,9 +318,9 @@ class BlueStreamViewModel(
 
     fun addComment(video: Video, text: String) {
         val authorName = myChannelState.value?.displayName?.takeIf { it.isNotBlank() }
-            ?: currentUser.displayName?.takeIf { it.isNotBlank() }
+            ?: userDisplayName?.takeIf { it.isNotBlank() }
             ?: "BlueStream User"
-        val avatar = myChannelState.value?.avatarUrl ?: currentUser.photoUrl?.toString()
+        val avatar = myChannelState.value?.avatarUrl ?: userAvatarUrl
         viewModelScope.launch {
             repository.addComment(video, text, authorName, avatar)
                 .onFailure { _statusBanner.value = it.message ?: "Could not post comment" }

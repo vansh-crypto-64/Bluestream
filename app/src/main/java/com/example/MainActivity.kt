@@ -8,7 +8,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -77,9 +76,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.BlueStreamRepository
+import com.example.data.LocalBlueStreamRepository
+import com.example.data.PLATFORM_OWNER_EMAIL
 import com.example.data.UiState
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.authStateFlow
+import com.example.ui.auth.getSafeFirebaseAuth
 import com.example.ui.auth.signOutUser
 import com.example.ui.components.BlueStreamBrandMark
 import com.example.ui.screens.HomeScreen
@@ -92,11 +94,9 @@ import com.example.ui.theme.BlueStreamPrimary
 import com.example.ui.theme.BlueStreamSecondary
 import com.example.ui.theme.BlueStreamTheme
 import com.example.ui.viewmodel.BlueStreamViewModel
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.flow.flowOf
 
 private enum class BlueStreamTab(
     val label: String,
@@ -134,49 +134,109 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppNavigation(
     isDarkBlueTheme: Boolean,
-    onToggleTheme: () -> Unit,
-    auth: FirebaseAuth = Firebase.auth
+    onToggleTheme: () -> Unit
 ) {
-    val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
-    val user = currentUser
+    val context = LocalContext.current
+    val safeAuth = remember(context) { getSafeFirebaseAuth(context) }
 
-    if (user == null) {
-        AuthScreen(onAuthSuccess = {})
-    } else {
-        key(user.uid) {
-            BlueStreamShell(
-                user = user,
-                isDarkBlueTheme = isDarkBlueTheme,
-                onToggleTheme = onToggleTheme
+    // Automatically open in Local Fallback Mode if Firebase / google-services.json is missing
+    var useLocalMode by rememberSaveable { mutableStateOf(safeAuth == null) }
+
+    val authFlow = remember(safeAuth) {
+        safeAuth?.authStateFlow() ?: flowOf(null)
+    }
+    val currentUser by authFlow.collectAsStateWithLifecycle(initialValue = safeAuth?.currentUser)
+
+    when {
+        useLocalMode || safeAuth == null -> {
+            key("local_mode") {
+                BlueStreamShell(
+                    firebaseUser = null,
+                    isLocalMode = true,
+                    isDarkBlueTheme = isDarkBlueTheme,
+                    onToggleTheme = onToggleTheme,
+                    onExitLocalMode = {
+                        if (safeAuth != null) useLocalMode = false
+                    }
+                )
+            }
+        }
+
+        currentUser == null -> {
+            AuthScreen(
+                onAuthSuccess = {},
+                onContinueLocalMode = { useLocalMode = true }
             )
+        }
+
+        else -> {
+            val user = currentUser!!
+            key(user.uid) {
+                BlueStreamShell(
+                    firebaseUser = user,
+                    isLocalMode = false,
+                    isDarkBlueTheme = isDarkBlueTheme,
+                    onToggleTheme = onToggleTheme,
+                    onExitLocalMode = {}
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun BlueStreamShell(
-    user: FirebaseUser,
+    firebaseUser: FirebaseUser?,
+    isLocalMode: Boolean,
     isDarkBlueTheme: Boolean,
-    onToggleTheme: () -> Unit
+    onToggleTheme: () -> Unit,
+    onExitLocalMode: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
+    val sessionKey = if (isLocalMode || firebaseUser == null) {
+        LocalBlueStreamRepository.LOCAL_OWNER_UID
+    } else {
+        firebaseUser.uid
+    }
+
     val viewModel: BlueStreamViewModel = viewModel(
-        key = user.uid,
+        key = sessionKey,
         factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY]) {
                     "APPLICATION_KEY missing from CreationExtras"
                 }
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
-                BlueStreamViewModel(
-                    repository = BlueStreamRepository(db),
-                    currentUserId = user.uid,
-                    currentUser = user
-                )
+                if (isLocalMode || firebaseUser == null) {
+                    BlueStreamViewModel(
+                        repository = LocalBlueStreamRepository(),
+                        currentUserId = LocalBlueStreamRepository.LOCAL_OWNER_UID,
+                        userDisplayName = "BlueStream Studio",
+                        userAvatarUrl = null,
+                        isPlatformOwner = true,
+                        isLocalMode = true
+                    )
+                } else {
+                    val dataSource = runCatching {
+                        val databaseId = app.getString(R.string.firestore_database_id)
+                        require(databaseId.isNotBlank()) { "Missing firestore_database_id" }
+                        BlueStreamRepository(FirebaseFirestore.getInstance(databaseId))
+                    }.getOrElse {
+                        LocalBlueStreamRepository(firebaseUser.uid)
+                    }
+                    val isOwner = firebaseUser.email.equals(PLATFORM_OWNER_EMAIL, ignoreCase = true) &&
+                        firebaseUser.isEmailVerified
+                    BlueStreamViewModel(
+                        repository = dataSource,
+                        currentUserId = firebaseUser.uid,
+                        userDisplayName = firebaseUser.displayName,
+                        userAvatarUrl = firebaseUser.photoUrl?.toString(),
+                        isPlatformOwner = isOwner,
+                        isLocalMode = dataSource is LocalBlueStreamRepository
+                    )
+                }
             }
         }
     )
@@ -206,7 +266,6 @@ private fun BlueStreamShell(
         viewModel.clearStatusBanner()
     }
 
-    // Back press on secondary tabs returns to Home
     if (activeWatchVideoId == null && currentTab != BlueStreamTab.Home) {
         BackHandler {
             currentTab = BlueStreamTab.Home
@@ -327,7 +386,7 @@ private fun BlueStreamShell(
                             isLiked = activeWatchVideo.id in likedIds,
                             isSubscribed = activeWatchVideo.ownerId in subscribedIds,
                             isSavedWatchLater = activeWatchVideo.id in watchLaterIds,
-                            currentUserId = user.uid,
+                            currentUserId = viewModel.currentUserId,
                             isPlatformOwner = viewModel.isPlatformOwner,
                             onBack = { viewModel.closeVideo() },
                             onSelectVideo = { viewModel.openVideo(it) },
@@ -357,7 +416,7 @@ private fun BlueStreamShell(
                                 videosState = publicVideosState,
                                 likedVideoIds = likedIds,
                                 subscribedChannelIds = subscribedIds,
-                                currentUserId = user.uid,
+                                currentUserId = viewModel.currentUserId,
                                 onWatchVideo = { viewModel.openVideo(it) },
                                 onToggleLike = { viewModel.toggleLike(it) },
                                 onToggleSubscribe = { viewModel.toggleSubscription(it) },
@@ -393,7 +452,7 @@ private fun BlueStreamShell(
 
                             BlueStreamTab.You -> LibraryProfileScreen(
                                 channel = myChannel,
-                                userEmail = user.email,
+                                userEmail = if (viewModel.isLocalMode) "Local Mode (Offline)" else firebaseUser?.email,
                                 isPlatformOwner = viewModel.isPlatformOwner,
                                 myVideosState = myVideosState,
                                 publicVideosState = publicVideosState,
@@ -406,7 +465,11 @@ private fun BlueStreamShell(
                                     viewModel.updateChannelProfile(name, handle, bio)
                                 },
                                 onSignOut = {
-                                    signOutUser(credentialManager, scope)
+                                    if (isLocalMode) {
+                                        onExitLocalMode()
+                                    } else {
+                                        signOutUser(context, credentialManager, scope)
+                                    }
                                 }
                             )
                         }

@@ -31,6 +31,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,7 +61,8 @@ import com.example.ui.theme.BlueStreamSecondary
 
 @Composable
 fun AuthScreen(
-    onAuthSuccess: () -> Unit
+    onAuthSuccess: () -> Unit,
+    onContinueLocalMode: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -298,10 +300,27 @@ fun AuthScreen(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedButton(
+                    onClick = onContinueLocalMode,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("continue_local_mode_button")
+                ) {
+                    Text(
+                        text = "Continue in Local Mode",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = BlueStreamSecondary
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "Sign in with your Google account to create your channel and start streaming.",
+                    text = "Sign in with Google for cloud sync, or use Local Mode offline.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF7D99C9),
                     textAlign = TextAlign.Center
