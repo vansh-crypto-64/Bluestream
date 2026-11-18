@@ -15,16 +15,21 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+      - name: Fix Missing Keystore & Web Client ID
+        run: |
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          cp debug.keystore app/debug.keystore 2>/dev/null || true
+          mkdir -p app/src/main/res/values
+          echo '<resources><string name="default_web_client_id">://googleusercontent.com</string></resources>' > app/src/main/res/values/google_auth.xml
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
       - name: Build Debug APK
-        run: gradle assembleDebug
+        run: gradle assembleDebug --no-configuration-cache
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: BlueStream-APK
           path: app/build/outputs/apk/debug/app-debug.apk
-
           
