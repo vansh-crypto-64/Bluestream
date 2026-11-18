@@ -1,0 +1,6 @@
+{
+  "name": "BlueStream",
+  "description": "Blue-themed social video sharing platform with uploads, channels, likes, comments, subscriptions, and adaptive phone/tablet/laptop layout.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
