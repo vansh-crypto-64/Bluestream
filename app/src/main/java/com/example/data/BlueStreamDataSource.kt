@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.Flow
 interface BlueStreamDataSource {
     fun observePublicVideos(currentUserId: String): Flow<List<Video>>
     fun observeUserVideos(userId: String): Flow<List<Video>>
+    fun observePendingModerationVideos(currentUserId: String): Flow<List<Video>>
+    fun observeOpenReports(currentUserId: String): Flow<List<VideoReport>>
     fun observeChannel(channelId: String, currentUserId: String): Flow<Channel?>
     fun observeComments(videoId: String, currentUserId: String): Flow<List<VideoComment>>
     fun observeLikes(userId: String): Flow<List<UserLike>>
@@ -42,6 +44,7 @@ interface BlueStreamDataSource {
         visibility: String
     ): Result<Unit>
 
+    suspend fun moderateVideo(videoId: String, status: String): Result<Unit>
     suspend fun toggleFeaturedVideo(videoId: String, featured: Boolean): Result<Unit>
     suspend fun deleteVideo(video: Video): Result<Unit>
     suspend fun incrementVideoView(video: Video): Result<Unit>
@@ -63,4 +66,6 @@ interface BlueStreamDataSource {
     ): Result<Unit>
 
     suspend fun deleteComment(video: Video, commentId: String): Result<Unit>
+    suspend fun reportVideo(video: Video, reason: String, details: String?): Result<Unit>
+    suspend fun updateReportStatus(reportId: String, status: String): Result<Unit>
 }

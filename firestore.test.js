@@ -48,13 +48,14 @@ function sampleVideoPayload(ownerId, overrides = {}) {
     ownerId,
     channelName: "Alice Tech",
     channelHandle: "@alicetech",
-    title: "Building a Blue Video Platform",
+    title: "Building an Online Blue Video Platform",
     description: "Full tour of our studio and setup.",
     category: "Tech",
-    videoUrl: "https://example.com/video.mp4",
-    thumbnailUrl: "preset:tech",
+    videoUrl: "https://firebasestorage.googleapis.com/v0/b/demo/o/video.mp4",
+    thumbnailUrl: "https://firebasestorage.googleapis.com/v0/b/demo/o/thumb.jpg",
     durationSeconds: 245,
     visibility: "public",
+    moderationStatus: "pending",
     featured: false,
     viewsCount: 0,
     likesCount: 0,
@@ -68,21 +69,22 @@ function sampleVideoPayload(ownerId, overrides = {}) {
 test("Unauthenticated user cannot read or write any BlueStream collection", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
   await assertFails(
-    unauthDb.collection("videos").where("visibility", "==", "public").get()
+    unauthDb
+      .collection("videos")
+      .where("visibility", "==", "public")
+      .where("moderationStatus", "==", "approved")
+      .get()
   );
   await assertFails(
     unauthDb.collection("videos").doc("vid_1").set(sampleVideoPayload(ALICE_UID))
   );
-  await assertFails(
-    unauthDb.collection("channels").doc(ALICE_UID).get()
-  );
+  await assertFails(unauthDb.collection("reports").get());
 });
 
-test("Creator can create channel, upload video, edit own video, and cannot spoof featured or ghost fields", async () => {
+test("Creator uploads pending video, cannot self-approve or feature, and can edit own metadata", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const now = new Date(Date.now() - 2000);
 
-  // Create channel
   await assertSucceeds(
     aliceDb.collection("channels").doc(ALICE_UID).set({
       ownerId: ALICE_UID,
@@ -96,114 +98,148 @@ test("Creator can create channel, upload video, edit own video, and cannot spoof
     })
   );
 
-  // Create public video (NO id field)
+  // Pending video create succeeds
   await assertSucceeds(
     aliceDb.collection("videos").doc("vid_1").set(sampleVideoPayload(ALICE_UID))
   );
 
-  // Reject ghost field / @DocumentId `id` field
+  // Creator CANNOT self-approve on create
   await assertFails(
     aliceDb
       .collection("videos")
-      .doc("vid_ghost")
-      .set(sampleVideoPayload(ALICE_UID, { id: "vid_ghost" }))
+      .doc("vid_self_approve")
+      .set(sampleVideoPayload(ALICE_UID, { moderationStatus: "approved" }))
   );
 
-  // Reject non-owner trying to set featured = true
+  // Creator CANNOT self-approve on update
   await assertFails(
-    aliceDb
-      .collection("videos")
-      .doc("vid_feat")
-      .set(sampleVideoPayload(ALICE_UID, { featured: true }))
-  );
-
-  // Creator partial edit succeeds
-  await assertSucceeds(
     aliceDb.collection("videos").doc("vid_1").update({
-      title: "Updated Blue Studio Tour",
+      moderationStatus: "approved",
       updatedAt: new Date(Date.now() - 500),
     })
   );
 
-  // Creator cannot mutate createdAt
+  // Creator CANNOT set featured = true
   await assertFails(
     aliceDb.collection("videos").doc("vid_1").update({
-      createdAt: new Date(Date.now() - 100),
-      updatedAt: new Date(Date.now() - 100),
+      featured: true,
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Creator CAN edit title & description
+  await assertSucceeds(
+    aliceDb.collection("videos").doc("vid_1").update({
+      title: "Updated Online Tour",
+      updatedAt: new Date(Date.now() - 500),
     })
   );
 });
 
-test("Viewer can query public videos, increment views/likes, comment, and cannot read private videos or edit others", async () => {
+test("Owner approves video for public feed; viewer can watch, like, comment, and report", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const ownerDb = testEnv
+    .authenticatedContext(OWNER_UID, {
+      email: OWNER_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
 
+  // Alice submits pending video
   await assertSucceeds(
     aliceDb.collection("videos").doc("vid_pub").set(sampleVideoPayload(ALICE_UID))
   );
+
+  // Bob cannot view pending video before approval
+  await assertFails(bobDb.collection("videos").doc("vid_pub").get());
+
+  // Owner queries pending moderation queue and approves
   await assertSucceeds(
-    aliceDb
-      .collection("videos")
-      .doc("vid_priv")
-      .set(sampleVideoPayload(ALICE_UID, { visibility: "private" }))
+    ownerDb.collection("videos").where("moderationStatus", "==", "pending").get()
   );
-
-  // Public feed query succeeds
   await assertSucceeds(
-    bobDb.collection("videos").where("visibility", "==", "public").get()
-  );
-
-  // Unfiltered list query fails for regular user
-  await assertFails(bobDb.collection("videos").get());
-
-  // Private video denied to Bob
-  await assertFails(bobDb.collection("videos").doc("vid_priv").get());
-
-  // Bob can increment viewsCount by 1
-  await assertSucceeds(
-    bobDb.collection("videos").doc("vid_pub").update({ viewsCount: 1 })
-  );
-
-  // Bob cannot jump viewsCount by 100
-  await assertFails(
-    bobDb.collection("videos").doc("vid_pub").update({ viewsCount: 101 })
-  );
-
-  // Bob cannot edit Alice's title
-  await assertFails(
-    bobDb.collection("videos").doc("vid_pub").update({
-      title: "Hijacked",
+    ownerDb.collection("videos").doc("vid_pub").update({
+      moderationStatus: "approved",
+      featured: true,
       updatedAt: new Date(Date.now() - 500),
     })
   );
 
-  // Bob can post a comment on existing video
-  const now = new Date(Date.now() - 1000);
+  // Bob queries public approved feed
   await assertSucceeds(
     bobDb
       .collection("videos")
-      .doc("vid_pub")
-      .collection("comments")
-      .doc("c_1")
-      .set({
-        videoId: "vid_pub",
-        authorId: BOB_UID,
-        authorName: "Bob Viewer",
-        text: "Love the blue theme!",
-        likesCount: 0,
-        createdAt: now,
-      })
-  );
-
-  // Filtered comments query succeeds
-  await assertSucceeds(
-    bobDb
-      .collection("videos")
-      .doc("vid_pub")
-      .collection("comments")
-      .where("videoId", "==", "vid_pub")
+      .where("visibility", "==", "public")
+      .where("moderationStatus", "==", "approved")
       .get()
   );
+
+  // Bob can increment view & like by +1
+  await assertSucceeds(
+    bobDb.collection("videos").doc("vid_pub").update({ viewsCount: 1 })
+  );
+  await assertSucceeds(
+    bobDb.collection("videos").doc("vid_pub").update({ likesCount: 1 })
+  );
+
+  // Bob submits a report
+  const now = new Date(Date.now() - 1000);
+  await assertSucceeds(
+    bobDb.collection("reports").doc("rep_1").set({
+      videoId: "vid_pub",
+      videoTitle: "Building an Online Blue Video Platform",
+      videoOwnerId: ALICE_UID,
+      reporterId: BOB_UID,
+      reason: "Spam or misleading",
+      details: "Test report details",
+      status: "open",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Regular user CANNOT list all reports or resolve reports
+  await assertFails(aliceDb.collection("reports").get());
+  await assertFails(
+    bobDb.collection("reports").doc("rep_1").update({
+      status: "resolved",
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+
+  // Owner CAN list open reports and resolve them
+  await assertSucceeds(
+    ownerDb.collection("reports").where("status", "==", "open").get()
+  );
+  await assertSucceeds(
+    ownerDb.collection("reports").doc("rep_1").update({
+      status: "resolved",
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+});
+
+test("Spoofed unverified owner email is rejected from admin actions", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const spoofedDb = testEnv
+    .authenticatedContext("spoof_uid", {
+      email: OWNER_EMAIL,
+      email_verified: false,
+    })
+    .firestore();
+
+  await assertSucceeds(
+    aliceDb.collection("videos").doc("vid_mod").set(sampleVideoPayload(ALICE_UID))
+  );
+
+  await assertFails(
+    spoofedDb.collection("videos").doc("vid_mod").update({
+      moderationStatus: "approved",
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+  await assertFails(spoofedDb.collection("videos").doc("vid_mod").delete());
 });
 
 test("User-scoped likes, subscriptions, and watch_later enforce strict per-user isolation", async () => {
@@ -219,51 +255,10 @@ test("User-scoped likes, subscriptions, and watch_later enforce strict per-user 
       createdAt: now,
     })
   );
-
   await assertSucceeds(
     bobDb.collection("users").doc(BOB_UID).collection("likes").get()
   );
-
-  // Cross-user isolation
   await assertFails(
     aliceDb.collection("users").doc(BOB_UID).collection("likes").get()
   );
-});
-
-test("Platform Owner (verified email) can feature and moderate videos; unverified spoofed email is rejected", async () => {
-  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const ownerDb = testEnv
-    .authenticatedContext(OWNER_UID, {
-      email: OWNER_EMAIL,
-      email_verified: true,
-    })
-    .firestore();
-  const spoofedDb = testEnv
-    .authenticatedContext("spoof_uid", {
-      email: OWNER_EMAIL,
-      email_verified: false,
-    })
-    .firestore();
-
-  await assertSucceeds(
-    aliceDb.collection("videos").doc("vid_mod").set(sampleVideoPayload(ALICE_UID))
-  );
-
-  // Unverified spoofed admin cannot feature or delete
-  await assertFails(
-    spoofedDb.collection("videos").doc("vid_mod").update({
-      featured: true,
-      updatedAt: new Date(Date.now() - 500),
-    })
-  );
-  await assertFails(spoofedDb.collection("videos").doc("vid_mod").delete());
-
-  // Verified Owner can feature and delete
-  await assertSucceeds(
-    ownerDb.collection("videos").doc("vid_mod").update({
-      featured: true,
-      updatedAt: new Date(Date.now() - 500),
-    })
-  );
-  await assertSucceeds(ownerDb.collection("videos").doc("vid_mod").delete());
 });

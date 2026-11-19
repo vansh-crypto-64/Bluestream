@@ -1,0 +1,42 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Global default-deny safety net
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+             request.auth.token.email == 'lakeskuke@gmail.com' &&
+             request.auth.token.email_verified == true;
+    }
+
+    // Authenticated user video uploads (max 250 MB, video/* content type)
+    match /videos/{userId}/{fileName} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() &&
+                               request.auth.uid == userId &&
+                               request.resource.size > 0 &&
+                               request.resource.size <= 250 * 1024 * 1024 &&
+                               request.resource.contentType.matches('video/.*');
+      allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // Authenticated user thumbnail uploads (max 10 MB, image/* content type)
+    match /thumbnails/{userId}/{fileName} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() &&
+                               request.auth.uid == userId &&
+                               request.resource.size > 0 &&
+                               request.resource.size <= 10 * 1024 * 1024 &&
+                               request.resource.contentType.matches('image/.*');
+      allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+    }
+  }
+}

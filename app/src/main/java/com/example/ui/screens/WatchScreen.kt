@@ -27,14 +27,18 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +62,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.Channel
+import com.example.data.REPORT_REASONS
 import com.example.data.UiState
 import com.example.data.Video
 import com.example.data.VideoComment
@@ -72,6 +79,7 @@ import com.example.ui.theme.BlueStreamSecondary
 @Composable
 fun WatchScreen(
     video: Video,
+    activeChannel: Channel?,
     upNextVideos: List<Video>,
     commentsState: UiState<List<VideoComment>>,
     isLiked: Boolean,
@@ -86,6 +94,7 @@ fun WatchScreen(
     onToggleWatchLater: () -> Unit,
     onToggleFeatured: () -> Unit,
     onDeleteVideo: () -> Unit,
+    onReportVideo: (reason: String, details: String?) -> Unit,
     onAddComment: (String) -> Unit,
     onDeleteComment: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -93,6 +102,7 @@ fun WatchScreen(
     var isFullscreen by remember { mutableStateOf(false) }
     var expandDescription by remember { mutableStateOf(false) }
     var commentDraft by remember { mutableStateOf("") }
+    var showReportDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     BackHandler {
@@ -177,6 +187,7 @@ fun WatchScreen(
                         Spacer(Modifier.height(14.dp))
                         WatchDetailsSection(
                             video = video,
+                            activeChannel = activeChannel,
                             isLiked = isLiked,
                             isSubscribed = isSubscribed,
                             isSavedWatchLater = isSavedWatchLater,
@@ -189,6 +200,7 @@ fun WatchScreen(
                             onToggleWatchLater = onToggleWatchLater,
                             onToggleFeatured = onToggleFeatured,
                             onDeleteVideo = onDeleteVideo,
+                            onOpenReport = { showReportDialog = true },
                             onShare = {
                                 val intent = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
@@ -263,6 +275,7 @@ fun WatchScreen(
                     Spacer(Modifier.height(14.dp))
                     WatchDetailsSection(
                         video = video,
+                        activeChannel = activeChannel,
                         isLiked = isLiked,
                         isSubscribed = isSubscribed,
                         isSavedWatchLater = isSavedWatchLater,
@@ -275,6 +288,7 @@ fun WatchScreen(
                         onToggleWatchLater = onToggleWatchLater,
                         onToggleFeatured = onToggleFeatured,
                         onDeleteVideo = onDeleteVideo,
+                        onOpenReport = { showReportDialog = true },
                         onShare = {
                             val intent = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
@@ -321,11 +335,79 @@ fun WatchScreen(
             }
         }
     }
+
+    if (showReportDialog) {
+        ReportVideoDialog(
+            videoTitle = video.title,
+            onDismiss = { showReportDialog = false },
+            onSubmit = { reason, details ->
+                onReportVideo(reason, details)
+                showReportDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun ReportVideoDialog(
+    videoTitle: String,
+    onDismiss: () -> Unit,
+    onSubmit: (reason: String, details: String?) -> Unit
+) {
+    var selectedReason by remember { mutableStateOf(REPORT_REASONS.first()) }
+    var details by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Report Video") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = videoTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                REPORT_REASONS.forEach { reason ->
+                    FilterChip(
+                        selected = selectedReason == reason,
+                        onClick = { selectedReason = reason },
+                        label = { Text(reason) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = BlueStreamPrimary,
+                            selectedLabelColor = Color.White
+                        )
+                    )
+                }
+                OutlinedTextField(
+                    value = details,
+                    onValueChange = { if (it.length <= 500) details = it },
+                    label = { Text("Additional details (optional)") },
+                    minLines = 2,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSubmit(selectedReason, details.takeIf { it.isNotBlank() }) },
+                colors = ButtonDefaults.buttonColors(containerColor = BlueStreamPrimary),
+                modifier = Modifier.testTag("submit_report_button")
+            ) {
+                Text("Submit Report")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
 
 @Composable
 private fun WatchDetailsSection(
     video: Video,
+    activeChannel: Channel?,
     isLiked: Boolean,
     isSubscribed: Boolean,
     isSavedWatchLater: Boolean,
@@ -338,6 +420,7 @@ private fun WatchDetailsSection(
     onToggleWatchLater: () -> Unit,
     onToggleFeatured: () -> Unit,
     onDeleteVideo: () -> Unit,
+    onOpenReport: () -> Unit,
     onShare: () -> Unit
 ) {
     Text(
@@ -378,8 +461,9 @@ private fun WatchDetailsSection(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                val subCountText = activeChannel?.let { " • ${formatCount(it.subscriberCount)} subscribers" } ?: ""
                 Text(
-                    text = video.channelHandle.ifBlank { "@creator" },
+                    text = "${video.channelHandle.ifBlank { "@creator" }}$subCountText",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -434,6 +518,15 @@ private fun WatchDetailsSection(
             onClick = onShare,
             tag = "watch_share_button"
         )
+        if (video.ownerId != currentUserId) {
+            ActionPill(
+                icon = Icons.Filled.Flag,
+                label = "Report",
+                highlighted = false,
+                onClick = onOpenReport,
+                tag = "watch_report_button"
+            )
+        }
         if (isPlatformOwner) {
             ActionPill(
                 icon = if (video.featured) Icons.Filled.Star else Icons.Filled.StarBorder,

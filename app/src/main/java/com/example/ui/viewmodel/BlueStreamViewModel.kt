@@ -5,15 +5,20 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.BlueStreamDataSource
 import com.example.data.Channel
+import com.example.data.FirebaseStorageUploader
 import com.example.data.UiState
+import com.example.data.UploadTransferState
 import com.example.data.UserLike
 import com.example.data.UserSubscription
 import com.example.data.Video
 import com.example.data.VideoComment
+import com.example.data.VideoReport
 import com.example.data.WatchLaterItem
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -28,11 +33,11 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalCoroutinesApi::class)
 class BlueStreamViewModel(
     private val repository: BlueStreamDataSource,
+    private val storageUploader: FirebaseStorageUploader,
     val currentUserId: String,
     private val userDisplayName: String?,
     private val userAvatarUrl: String?,
-    val isPlatformOwner: Boolean,
-    val isLocalMode: Boolean = false
+    val isPlatformOwner: Boolean
 ) : ViewModel() {
 
     private val _selectedCategory = MutableStateFlow("All")
@@ -44,15 +49,19 @@ class BlueStreamViewModel(
     private val _activeWatchVideoId = MutableStateFlow<String?>(null)
     val activeWatchVideoId: StateFlow<String?> = _activeWatchVideoId.asStateFlow()
 
+    private val _activeChannelId = MutableStateFlow<String?>(null)
+    val activeChannelId: StateFlow<String?> = _activeChannelId.asStateFlow()
+
     private val _statusBanner = MutableStateFlow<String?>(null)
     val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
 
-    private val _isUploading = MutableStateFlow(false)
-    val isUploading: StateFlow<Boolean> = _isUploading.asStateFlow()
+    private val _uploadTransferState = MutableStateFlow(UploadTransferState())
+    val uploadTransferState: StateFlow<UploadTransferState> = _uploadTransferState.asStateFlow()
 
+    private var uploadJob: Job? = null
     private val viewedVideoIds = mutableSetOf<String>()
 
-    private fun <T> kotlinx.coroutines.flow.Flow<T>.toUiState(
+    private fun <T> Flow<T>.toUiState(
         tag: String,
         fallbackMessage: String
     ): StateFlow<UiState<T>> = this
@@ -74,11 +83,51 @@ class BlueStreamViewModel(
 
     val publicVideosState: StateFlow<UiState<List<Video>>> =
         repository.observePublicVideos(currentUserId)
-            .toUiState("publicVideos", "Unable to load videos")
+            .toUiState("publicVideos", "Unable to load online video feed")
 
     val myVideosState: StateFlow<UiState<List<Video>>> =
         repository.observeUserVideos(currentUserId)
-            .toUiState("myVideos", "Unable to load your studio videos")
+            .toUiState("myVideos", "Unable to load your uploaded videos")
+
+    val pendingModerationVideosState: StateFlow<List<Video>> =
+        if (isPlatformOwner) {
+            repository.observePendingModerationVideos(currentUserId)
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    Log.w(TAG, "pendingModeration error", firestoreError ?: error)
+                    emit(emptyList())
+                }
+                .stateIn(
+                    scope = viewModelScope,
+                    started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                    initialValue = emptyList()
+                )
+        } else {
+            MutableStateFlow(emptyList())
+        }
+
+    val openReportsState: StateFlow<List<VideoReport>> =
+        if (isPlatformOwner) {
+            repository.observeOpenReports(currentUserId)
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    Log.w(TAG, "openReports error", firestoreError ?: error)
+                    emit(emptyList())
+                }
+                .stateIn(
+                    scope = viewModelScope,
+                    started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+                    initialValue = emptyList()
+                )
+        } else {
+            MutableStateFlow(emptyList())
+        }
 
     val myChannelState: StateFlow<Channel?> =
         repository.observeChannel(currentUserId, currentUserId)
@@ -87,7 +136,6 @@ class BlueStreamViewModel(
                     .filterIsInstance<FirebaseFirestoreException>()
                     .firstOrNull()
                 if (firestoreError == null && error is CancellationException) throw error
-                Log.w(TAG, "myChannel error", firestoreError ?: error)
                 emit(null)
             }
             .stateIn(
@@ -95,6 +143,26 @@ class BlueStreamViewModel(
                 started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
                 initialValue = null
             )
+
+    val activeChannelState: StateFlow<Channel?> =
+        _activeChannelId.flatMapLatest { channelId ->
+            if (channelId.isNullOrBlank()) {
+                flowOf(null)
+            } else {
+                repository.observeChannel(channelId, currentUserId)
+                    .catch { error ->
+                        val firestoreError = generateSequence(error) { it.cause }
+                            .filterIsInstance<FirebaseFirestoreException>()
+                            .firstOrNull()
+                        if (firestoreError == null && error is CancellationException) throw error
+                        emit(null)
+                    }
+            }
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+            initialValue = null
+        )
 
     val likesState: StateFlow<List<UserLike>> =
         repository.observeLikes(currentUserId)
@@ -183,6 +251,7 @@ class BlueStreamViewModel(
 
     fun openVideo(video: Video) {
         _activeWatchVideoId.value = video.id
+        _activeChannelId.value = video.ownerId
         if (video.id.isNotBlank() && viewedVideoIds.add(video.id)) {
             viewModelScope.launch {
                 repository.incrementVideoView(video)
@@ -192,6 +261,22 @@ class BlueStreamViewModel(
 
     fun closeVideo() {
         _activeWatchVideoId.value = null
+    }
+
+    fun openChannel(channelId: String) {
+        _activeChannelId.value = channelId
+    }
+
+    fun cancelUpload() {
+        storageUploader.cancelActiveUpload()
+        uploadJob?.cancel()
+        uploadJob = null
+        _uploadTransferState.value = UploadTransferState()
+        _statusBanner.value = "Upload cancelled"
+    }
+
+    fun clearUploadError() {
+        _uploadTransferState.value = UploadTransferState()
     }
 
     fun uploadVideo(
@@ -204,9 +289,41 @@ class BlueStreamViewModel(
         visibility: String,
         onSuccess: (String) -> Unit
     ) {
-        if (_isUploading.value) return
-        viewModelScope.launch {
-            _isUploading.value = true
+        if (_uploadTransferState.value.active) return
+        uploadJob = viewModelScope.launch {
+            _uploadTransferState.value = UploadTransferState(
+                active = true,
+                progress = 0.02f,
+                stage = "Preparing upload...",
+                error = null
+            )
+
+            // 1. Upload device media to Firebase Storage (or pass through direct HTTPS URL)
+            val storageResult = storageUploader.uploadMedia(
+                uid = currentUserId,
+                localVideoUri = videoUrl,
+                localThumbnailUri = thumbnailUrl,
+                onProgress = { progress, stage ->
+                    _uploadTransferState.value = UploadTransferState(
+                        active = true,
+                        progress = progress,
+                        stage = stage,
+                        error = null
+                    )
+                }
+            )
+
+            val uploaded = storageResult.getOrElse { err ->
+                _uploadTransferState.value = UploadTransferState(
+                    active = false,
+                    progress = 0f,
+                    stage = "",
+                    error = err.localizedMessage ?: "Firebase Storage upload failed. Check your connection and retry."
+                )
+                return@launch
+            }
+
+            // 2. Write Video document to Cloud Firestore
             val channel = myChannelState.value
                 ?: repository.ensureChannelExists(currentUserId, userDisplayName, userAvatarUrl).getOrNull()
                 ?: Channel(
@@ -216,37 +333,49 @@ class BlueStreamViewModel(
                     handle = "@creator",
                     avatarUrl = userAvatarUrl
                 )
+
             val result = repository.uploadVideo(
                 channel = channel,
                 title = title,
                 description = description,
                 category = category,
-                videoUrl = videoUrl,
-                thumbnailUrl = thumbnailUrl,
+                videoUrl = uploaded.videoDownloadUrl,
+                thumbnailUrl = uploaded.thumbnailDownloadUrl,
                 durationSeconds = durationSeconds,
                 visibility = visibility
             )
-            _isUploading.value = false
+
             result.onSuccess { newId ->
-                _statusBanner.value = "Video published to BlueStream!"
+                _uploadTransferState.value = UploadTransferState()
+                _statusBanner.value = if (isPlatformOwner) {
+                    "Video published live to BlueStream!"
+                } else {
+                    "Video uploaded! Pending owner moderation before appearing in the public feed."
+                }
                 onSuccess(newId)
             }.onFailure { err ->
-                _statusBanner.value = err.message ?: "Upload failed"
+                _uploadTransferState.value = UploadTransferState(
+                    active = false,
+                    progress = 0f,
+                    stage = "",
+                    error = err.localizedMessage ?: "Could not save video metadata."
+                )
             }
         }
     }
 
-    fun updateVideoMetadata(
-        videoId: String,
-        title: String,
-        description: String,
-        category: String,
-        visibility: String
-    ) {
+    fun moderateVideo(videoId: String, status: String) {
+        if (!isPlatformOwner) return
         viewModelScope.launch {
-            repository.updateVideoMetadata(videoId, title, description, category, visibility)
-                .onSuccess { _statusBanner.value = "Video updated" }
-                .onFailure { _statusBanner.value = it.message ?: "Could not update video" }
+            repository.moderateVideo(videoId, status)
+                .onSuccess {
+                    _statusBanner.value = when (status) {
+                        "approved" -> "Video approved & published to Home feed"
+                        "rejected" -> "Video rejected"
+                        else -> "Moderation status updated"
+                    }
+                }
+                .onFailure { _statusBanner.value = it.message ?: "Moderation action failed" }
         }
     }
 
@@ -331,6 +460,25 @@ class BlueStreamViewModel(
         viewModelScope.launch {
             repository.deleteComment(video, commentId)
                 .onFailure { _statusBanner.value = it.message ?: "Could not delete comment" }
+        }
+    }
+
+    fun reportVideo(video: Video, reason: String, details: String?) {
+        viewModelScope.launch {
+            repository.reportVideo(video, reason, details)
+                .onSuccess { _statusBanner.value = "Report submitted for owner review." }
+                .onFailure { _statusBanner.value = it.message ?: "Could not submit report" }
+        }
+    }
+
+    fun resolveReport(reportId: String, status: String) {
+        if (!isPlatformOwner) return
+        viewModelScope.launch {
+            repository.updateReportStatus(reportId, status)
+                .onSuccess {
+                    _statusBanner.value = if (status == "resolved") "Report resolved" else "Report dismissed"
+                }
+                .onFailure { _statusBanner.value = it.message ?: "Could not update report" }
         }
     }
 

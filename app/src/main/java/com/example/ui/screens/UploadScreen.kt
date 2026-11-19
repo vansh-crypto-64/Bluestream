@@ -56,8 +56,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.LinearProgressIndicator
 import com.example.data.MediaUploadHelper
 import com.example.data.UPLOAD_CATEGORIES
+import com.example.data.UploadTransferState
 import com.example.ui.components.VideoThumbnailImage
 import com.example.ui.components.formatDuration
 import com.example.ui.theme.BlueStreamPrimary
@@ -67,7 +69,9 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun UploadScreen(
-    isUploading: Boolean,
+    uploadState: UploadTransferState,
+    onCancelUpload: () -> Unit,
+    onClearUploadError: () -> Unit,
     onPublish: (
         title: String,
         description: String,
@@ -79,6 +83,7 @@ fun UploadScreen(
     ) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isUploading = uploadState.active
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -392,6 +397,120 @@ fun UploadScreen(
                 )
             }
 
+            if (uploadState.active) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = 1.dp,
+                            color = BlueStreamSecondary.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .testTag("upload_progress_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = uploadState.stage.ifBlank { "Uploading to BlueStream..." },
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${(uploadState.progress.coerceIn(0f, 1f) * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = BlueStreamSecondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        LinearProgressIndicator(
+                            progress = { uploadState.progress.coerceIn(0f, 1f) },
+                            color = BlueStreamSecondary,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            OutlinedButton(
+                                onClick = onCancelUpload,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("cancel_upload_button")
+                            ) {
+                                Text("Cancel Upload")
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (uploadState.error != null) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .testTag("upload_error_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = uploadState.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = {
+                                    onClearUploadError()
+                                    if (title.isNotBlank() && videoUrl.isNotBlank()) {
+                                        onPublish(
+                                            title,
+                                            description,
+                                            category,
+                                            videoUrl,
+                                            thumbnailUrl,
+                                            durationSeconds,
+                                            visibility
+                                        )
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = BlueStreamPrimary),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("retry_upload_button")
+                            ) {
+                                Text("Retry Upload")
+                            }
+                            OutlinedButton(
+                                onClick = onClearUploadError,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Dismiss")
+                            }
+                        }
+                    }
+                }
+            }
+
             Button(
                 onClick = {
                     if (title.isBlank()) {
@@ -403,6 +522,7 @@ fun UploadScreen(
                         return@Button
                     }
                     localError = null
+                    onClearUploadError()
                     onPublish(
                         title,
                         description,
@@ -431,7 +551,10 @@ fun UploadScreen(
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(Modifier.width(10.dp))
-                    Text("Publishing...", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = uploadState.stage.ifBlank { "Uploading..." },
+                        style = MaterialTheme.typography.titleMedium
+                    )
                 } else {
                     Icon(Icons.Filled.CloudUpload, contentDescription = null)
                     Spacer(Modifier.width(10.dp))

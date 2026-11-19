@@ -49,6 +49,14 @@ service cloud.firestore {
       return vis in ['public', 'private'];
     }
 
+    function isValidModerationStatus(status) {
+      return status in ['pending', 'approved', 'rejected'];
+    }
+
+    function isValidReportStatus(status) {
+      return status in ['open', 'resolved', 'dismissed'];
+    }
+
     function isValidChannel(data) {
       return data.ownerId is string && isValidId(data.ownerId) &&
              data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
@@ -69,14 +77,27 @@ service cloud.firestore {
              data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
              data.description is string && data.description.size() <= 2000 &&
              data.category is string && isValidCategory(data.category) &&
-             data.videoUrl is string && data.videoUrl.size() >= 1 && data.videoUrl.size() <= 1000 &&
-             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1000)) &&
+             data.videoUrl is string && data.videoUrl.size() >= 1 && data.videoUrl.size() <= 1500 &&
+             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1500)) &&
              data.durationSeconds is int && data.durationSeconds >= 0 && data.durationSeconds <= 43200 &&
              data.visibility is string && isValidVisibility(data.visibility) &&
+             data.moderationStatus is string && isValidModerationStatus(data.moderationStatus) &&
              data.featured is bool &&
              data.viewsCount is int && data.viewsCount >= 0 &&
              data.likesCount is int && data.likesCount >= 0 &&
              data.commentsCount is int && data.commentsCount >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidVideoReport(data) {
+      return data.videoId is string && isValidId(data.videoId) &&
+             data.videoTitle is string && data.videoTitle.size() >= 1 && data.videoTitle.size() <= 120 &&
+             data.videoOwnerId is string && isValidId(data.videoOwnerId) &&
+             data.reporterId is string && isValidId(data.reporterId) &&
+             data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 100 &&
+             (!('details' in data) || data.details == null || (data.details is string && data.details.size() <= 500)) &&
+             data.status is string && isValidReportStatus(data.status) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -95,7 +116,7 @@ service cloud.firestore {
       return data.videoId is string && isValidId(data.videoId) &&
              data.videoTitle is string && data.videoTitle.size() >= 1 && data.videoTitle.size() <= 120 &&
              data.channelName is string && data.channelName.size() >= 1 && data.channelName.size() <= 60 &&
-             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1000)) &&
+             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1500)) &&
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
@@ -111,7 +132,7 @@ service cloud.firestore {
       return data.videoId is string && isValidId(data.videoId) &&
              data.videoTitle is string && data.videoTitle.size() >= 1 && data.videoTitle.size() <= 120 &&
              data.channelName is string && data.channelName.size() >= 1 && data.channelName.size() <= 60 &&
-             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1000)) &&
+             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1500)) &&
              data.durationSeconds is int && data.durationSeconds >= 0 && data.durationSeconds <= 43200 &&
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
@@ -151,13 +172,13 @@ service cloud.firestore {
     // --- VIDEOS COLLECTION ---
     match /videos/{videoId} {
       allow get: if isSignedIn() && isValidId(videoId) && (
-        existing().visibility == 'public' ||
+        (existing().visibility == 'public' && existing().moderationStatus == 'approved') ||
         existing().ownerId == request.auth.uid ||
         isAdmin()
       );
 
       allow list: if isSignedIn() && (
-        resource.data.visibility == 'public' ||
+        (resource.data.visibility == 'public' && resource.data.moderationStatus == 'approved') ||
         resource.data.ownerId == request.auth.uid ||
         isAdmin()
       );
@@ -165,9 +186,10 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
                        isValidId(videoId) &&
                        incoming().ownerId == request.auth.uid &&
-                       incoming().keys().hasAll(['ownerId', 'channelName', 'channelHandle', 'title', 'description', 'category', 'videoUrl', 'durationSeconds', 'visibility', 'featured', 'viewsCount', 'likesCount', 'commentsCount', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['ownerId', 'channelName', 'channelHandle', 'channelAvatarUrl', 'title', 'description', 'category', 'videoUrl', 'thumbnailUrl', 'durationSeconds', 'visibility', 'featured', 'viewsCount', 'likesCount', 'commentsCount', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasAll(['ownerId', 'channelName', 'channelHandle', 'title', 'description', 'category', 'videoUrl', 'durationSeconds', 'visibility', 'moderationStatus', 'featured', 'viewsCount', 'likesCount', 'commentsCount', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['ownerId', 'channelName', 'channelHandle', 'channelAvatarUrl', 'title', 'description', 'category', 'videoUrl', 'thumbnailUrl', 'durationSeconds', 'visibility', 'moderationStatus', 'featured', 'viewsCount', 'likesCount', 'commentsCount', 'createdAt', 'updatedAt']) &&
                        (incoming().featured == false || isAdmin()) &&
+                       (incoming().moderationStatus == 'pending' || isAdmin()) &&
                        incoming().viewsCount == 0 &&
                        incoming().likesCount == 0 &&
                        incoming().commentsCount == 0 &&
@@ -178,23 +200,23 @@ service cloud.firestore {
                        isValidVideo(incoming()) &&
                        incoming().ownerId == existing().ownerId &&
                        incoming().createdAt == existing().createdAt && (
-                         // Action 1: Platform Owner/Admin moderation & featuring
+                         // Action 1: Platform Owner/Admin moderation (approve/reject/feature/edit)
                          (isAdmin() &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'visibility', 'featured', 'thumbnailUrl', 'updatedAt'])) ||
-                         // Action 2: Creator edit metadata
+                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'visibility', 'moderationStatus', 'featured', 'thumbnailUrl', 'updatedAt'])) ||
+                         // Action 2: Creator edit metadata (cannot self-approve or feature)
                          (existing().ownerId == request.auth.uid &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'visibility', 'thumbnailUrl', 'updatedAt'])) ||
-                         // Action 3: Increment view count (+1)
-                         (existing().visibility == 'public' &&
+                         // Action 3: Increment view count (+1) on approved public video
+                         (existing().visibility == 'public' && existing().moderationStatus == 'approved' &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount']) &&
                           incoming().viewsCount == existing().viewsCount + 1) ||
-                         // Action 4: Toggle like count (+/- 1)
-                         (existing().visibility == 'public' &&
+                         // Action 4: Toggle like count (+/- 1) on approved public video
+                         (existing().visibility == 'public' && existing().moderationStatus == 'approved' &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['likesCount']) &&
                           (incoming().likesCount == existing().likesCount + 1 ||
                            incoming().likesCount == existing().likesCount - 1)) ||
-                         // Action 5: Sync comment count (+/- 1)
-                         (existing().visibility == 'public' &&
+                         // Action 5: Sync comment count (+/- 1) on approved public video
+                         (existing().visibility == 'public' && existing().moderationStatus == 'approved' &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['commentsCount']) &&
                           (incoming().commentsCount == existing().commentsCount + 1 ||
                            incoming().commentsCount == existing().commentsCount - 1))
@@ -236,6 +258,35 @@ service cloud.firestore {
           existing().authorId == request.auth.uid || isAdmin()
         );
       }
+    }
+
+    // --- VIDEO REPORTS COLLECTION ---
+    match /reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && (
+        existing().reporterId == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.reporterId == request.auth.uid || isAdmin()
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(reportId) &&
+                       incoming().reporterId == request.auth.uid &&
+                       incoming().status == 'open' &&
+                       incoming().keys().hasAll(['videoId', 'videoTitle', 'videoOwnerId', 'reporterId', 'reason', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['videoId', 'videoTitle', 'videoOwnerId', 'reporterId', 'reason', 'details', 'status', 'createdAt', 'updatedAt']) &&
+                       isValidVideoReport(incoming()) &&
+                       exists(/databases/$(database)/documents/videos/$(incoming().videoId));
+
+      allow update: if isAdmin() &&
+                       isValidId(reportId) &&
+                       isValidVideoReport(incoming()) &&
+                       incoming().videoId == existing().videoId &&
+                       incoming().reporterId == existing().reporterId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(reportId);
     }
 
     // --- USER-SCOPED INTERACTION SUBCOLLECTIONS ---

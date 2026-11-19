@@ -76,9 +76,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.BlueStreamRepository
-import com.example.data.LocalBlueStreamRepository
+import com.example.data.FirebaseStorageUploader
 import com.example.data.PLATFORM_OWNER_EMAIL
 import com.example.data.UiState
+import com.example.data.Video
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.authStateFlow
 import com.example.ui.auth.getSafeFirebaseAuth
@@ -139,111 +140,64 @@ fun AppNavigation(
     val context = LocalContext.current
     val safeAuth = remember(context) { getSafeFirebaseAuth(context) }
 
-    // Automatically open in Local Fallback Mode if Firebase / google-services.json is missing
-    var useLocalMode by rememberSaveable { mutableStateOf(safeAuth == null) }
-
     val authFlow = remember(safeAuth) {
         safeAuth?.authStateFlow() ?: flowOf(null)
     }
     val currentUser by authFlow.collectAsStateWithLifecycle(initialValue = safeAuth?.currentUser)
 
-    when {
-        useLocalMode || safeAuth == null -> {
-            key("local_mode") {
-                BlueStreamShell(
-                    firebaseUser = null,
-                    isLocalMode = true,
-                    isDarkBlueTheme = isDarkBlueTheme,
-                    onToggleTheme = onToggleTheme,
-                    onExitLocalMode = {
-                        if (safeAuth != null) useLocalMode = false
-                    }
-                )
-            }
-        }
-
-        currentUser == null -> {
-            AuthScreen(
-                onAuthSuccess = {},
-                onContinueLocalMode = { useLocalMode = true }
+    if (safeAuth == null || currentUser == null) {
+        AuthScreen(onAuthSuccess = {})
+    } else {
+        val user = currentUser!!
+        key(user.uid) {
+            BlueStreamShell(
+                firebaseUser = user,
+                isDarkBlueTheme = isDarkBlueTheme,
+                onToggleTheme = onToggleTheme
             )
-        }
-
-        else -> {
-            val user = currentUser!!
-            key(user.uid) {
-                BlueStreamShell(
-                    firebaseUser = user,
-                    isLocalMode = false,
-                    isDarkBlueTheme = isDarkBlueTheme,
-                    onToggleTheme = onToggleTheme,
-                    onExitLocalMode = {}
-                )
-            }
         }
     }
 }
 
 @Composable
 private fun BlueStreamShell(
-    firebaseUser: FirebaseUser?,
-    isLocalMode: Boolean,
+    firebaseUser: FirebaseUser,
     isDarkBlueTheme: Boolean,
-    onToggleTheme: () -> Unit,
-    onExitLocalMode: () -> Unit
+    onToggleTheme: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
-    val sessionKey = if (isLocalMode || firebaseUser == null) {
-        LocalBlueStreamRepository.LOCAL_OWNER_UID
-    } else {
-        firebaseUser.uid
-    }
-
     val viewModel: BlueStreamViewModel = viewModel(
-        key = sessionKey,
+        key = firebaseUser.uid,
         factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY]) {
                     "APPLICATION_KEY missing from CreationExtras"
                 }
-                if (isLocalMode || firebaseUser == null) {
-                    BlueStreamViewModel(
-                        repository = LocalBlueStreamRepository(),
-                        currentUserId = LocalBlueStreamRepository.LOCAL_OWNER_UID,
-                        userDisplayName = "BlueStream Studio",
-                        userAvatarUrl = null,
-                        isPlatformOwner = true,
-                        isLocalMode = true
-                    )
-                } else {
-                    val dataSource = runCatching {
-                        val databaseId = app.getString(R.string.firestore_database_id)
-                        require(databaseId.isNotBlank()) { "Missing firestore_database_id" }
-                        BlueStreamRepository(FirebaseFirestore.getInstance(databaseId))
-                    }.getOrElse {
-                        LocalBlueStreamRepository(firebaseUser.uid)
-                    }
-                    val isOwner = firebaseUser.email.equals(PLATFORM_OWNER_EMAIL, ignoreCase = true) &&
-                        firebaseUser.isEmailVerified
-                    BlueStreamViewModel(
-                        repository = dataSource,
-                        currentUserId = firebaseUser.uid,
-                        userDisplayName = firebaseUser.displayName,
-                        userAvatarUrl = firebaseUser.photoUrl?.toString(),
-                        isPlatformOwner = isOwner,
-                        isLocalMode = dataSource is LocalBlueStreamRepository
-                    )
-                }
+                val databaseId = app.getString(R.string.firestore_database_id)
+                val dataSource = BlueStreamRepository(FirebaseFirestore.getInstance(databaseId))
+                val isOwner = firebaseUser.email.equals(PLATFORM_OWNER_EMAIL, ignoreCase = true) &&
+                    firebaseUser.isEmailVerified
+                BlueStreamViewModel(
+                    repository = dataSource,
+                    storageUploader = FirebaseStorageUploader(),
+                    currentUserId = firebaseUser.uid,
+                    userDisplayName = firebaseUser.displayName,
+                    userAvatarUrl = firebaseUser.photoUrl?.toString(),
+                    isPlatformOwner = isOwner
+                )
             }
         }
     )
 
     val publicVideosState by viewModel.publicVideosState.collectAsStateWithLifecycle()
     val myVideosState by viewModel.myVideosState.collectAsStateWithLifecycle()
+    val pendingModerationVideos by viewModel.pendingModerationVideosState.collectAsStateWithLifecycle()
+    val openReports by viewModel.openReportsState.collectAsStateWithLifecycle()
     val myChannel by viewModel.myChannelState.collectAsStateWithLifecycle()
+    val activeChannel by viewModel.activeChannelState.collectAsStateWithLifecycle()
     val likes by viewModel.likesState.collectAsStateWithLifecycle()
     val subscriptions by viewModel.subscriptionsState.collectAsStateWithLifecycle()
     val watchLater by viewModel.watchLaterState.collectAsStateWithLifecycle()
@@ -253,7 +207,7 @@ private fun BlueStreamShell(
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val activeWatchVideoId by viewModel.activeWatchVideoId.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
-    val isUploading by viewModel.isUploading.collectAsStateWithLifecycle()
+    val uploadTransferState by viewModel.uploadTransferState.collectAsStateWithLifecycle()
 
     var currentTab by rememberSaveable { mutableStateOf(BlueStreamTab.Home) }
     var isSearchExpanded by rememberSaveable { mutableStateOf(false) }
@@ -276,10 +230,10 @@ private fun BlueStreamShell(
     val subscribedIds = remember(subscriptions) { subscriptions.map { it.channelId }.toSet() }
     val watchLaterIds = remember(watchLater) { watchLater.map { it.videoId }.toSet() }
 
-    val allKnownVideos = remember(publicVideosState, myVideosState) {
+    val allKnownVideos = remember(publicVideosState, myVideosState, pendingModerationVideos) {
         val pub = (publicVideosState as? UiState.Success)?.data ?: emptyList()
         val mine = (myVideosState as? UiState.Success)?.data ?: emptyList()
-        (pub + mine).distinctBy { it.id }
+        (pub + mine + pendingModerationVideos).distinctBy { it.id }
     }
     val activeWatchVideo = remember(activeWatchVideoId, allKnownVideos) {
         activeWatchVideoId?.let { id -> allKnownVideos.firstOrNull { it.id == id } }
@@ -378,9 +332,14 @@ private fun BlueStreamShell(
 
                 Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                     if (activeWatchVideo != null) {
-                        val upNext = allKnownVideos.filter { it.id != activeWatchVideo.id && it.visibility == "public" }
+                        val upNext = allKnownVideos.filter {
+                            it.id != activeWatchVideo.id &&
+                                it.visibility == "public" &&
+                                it.moderationStatus == "approved"
+                        }
                         WatchScreen(
                             video = activeWatchVideo,
+                            activeChannel = activeChannel,
                             upNextVideos = upNext,
                             commentsState = commentsState,
                             isLiked = activeWatchVideo.id in likedIds,
@@ -395,6 +354,9 @@ private fun BlueStreamShell(
                             onToggleWatchLater = { viewModel.toggleWatchLater(activeWatchVideo) },
                             onToggleFeatured = { viewModel.toggleFeatured(activeWatchVideo) },
                             onDeleteVideo = { viewModel.deleteVideo(activeWatchVideo) },
+                            onReportVideo = { reason, details ->
+                                viewModel.reportVideo(activeWatchVideo, reason, details)
+                            },
                             onAddComment = { text -> viewModel.addComment(activeWatchVideo, text) },
                             onDeleteComment = { commentId -> viewModel.deleteComment(activeWatchVideo, commentId) },
                             modifier = Modifier.statusBarsPadding()
@@ -424,7 +386,9 @@ private fun BlueStreamShell(
                             )
 
                             BlueStreamTab.Upload -> UploadScreen(
-                                isUploading = isUploading,
+                                uploadState = uploadTransferState,
+                                onCancelUpload = { viewModel.cancelUpload() },
+                                onClearUploadError = { viewModel.clearUploadError() },
                                 onPublish = { title, desc, cat, url, thumb, dur, vis ->
                                     viewModel.uploadVideo(
                                         title = title,
@@ -435,7 +399,11 @@ private fun BlueStreamShell(
                                         durationSeconds = dur,
                                         visibility = vis,
                                         onSuccess = {
-                                            currentTab = BlueStreamTab.Home
+                                            currentTab = if (viewModel.isPlatformOwner) {
+                                                BlueStreamTab.Home
+                                            } else {
+                                                BlueStreamTab.You
+                                            }
                                         }
                                     )
                                 }
@@ -452,24 +420,31 @@ private fun BlueStreamShell(
 
                             BlueStreamTab.You -> LibraryProfileScreen(
                                 channel = myChannel,
-                                userEmail = if (viewModel.isLocalMode) "Local Mode (Offline)" else firebaseUser?.email,
+                                userEmail = firebaseUser.email,
                                 isPlatformOwner = viewModel.isPlatformOwner,
                                 myVideosState = myVideosState,
                                 publicVideosState = publicVideosState,
+                                pendingModerationVideos = pendingModerationVideos,
+                                openReports = openReports,
                                 watchLaterItems = watchLater,
                                 likedItems = likes,
                                 onVideoClick = { viewModel.openVideo(it) },
                                 onDeleteVideo = { viewModel.deleteVideo(it) },
                                 onToggleFeatured = { viewModel.toggleFeatured(it) },
+                                onApproveVideo = { viewModel.moderateVideo(it.id, "approved") },
+                                onRejectVideo = { viewModel.moderateVideo(it.id, "rejected") },
+                                onDismissReport = { viewModel.resolveReport(it, "dismissed") },
+                                onRemoveReportedVideo = { report ->
+                                    val target = allKnownVideos.firstOrNull { it.id == report.videoId }
+                                        ?: Video(id = report.videoId, title = report.videoTitle)
+                                    viewModel.deleteVideo(target)
+                                    viewModel.resolveReport(report.id, "resolved")
+                                },
                                 onUpdateChannelProfile = { name, handle, bio ->
                                     viewModel.updateChannelProfile(name, handle, bio)
                                 },
                                 onSignOut = {
-                                    if (isLocalMode) {
-                                        onExitLocalMode()
-                                    } else {
-                                        signOutUser(context, credentialManager, scope)
-                                    }
+                                    signOutUser(context, credentialManager, scope)
                                 }
                             )
                         }

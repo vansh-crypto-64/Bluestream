@@ -5,7 +5,6 @@ import com.example.R
 import com.google.firebase.Firebase
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -61,6 +60,7 @@ class BlueStreamRepository(
         emitAll(
             db.collection("videos")
                 .whereEqualTo("visibility", "public")
+                .whereEqualTo("moderationStatus", "approved")
                 .snapshots()
                 .map { snapshot ->
                     snapshot.toObjects(Video::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
@@ -84,6 +84,34 @@ class BlueStreamRepository(
                         .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
                 }
                 .logFirestoreErrors(OperationType.LIST, path, userId)
+        )
+    }
+
+    override fun observePendingModerationVideos(currentUserId: String): Flow<List<Video>> = flow {
+        val path = "videos"
+        emitAll(
+            db.collection("videos")
+                .whereEqualTo("moderationStatus", "pending")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(Video::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                        .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+                }
+                .logFirestoreErrors(OperationType.LIST, path, currentUserId)
+        )
+    }
+
+    override fun observeOpenReports(currentUserId: String): Flow<List<VideoReport>> = flow {
+        val path = "reports"
+        emitAll(
+            db.collection("reports")
+                .whereEqualTo("status", "open")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(VideoReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                        .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+                }
+                .logFirestoreErrors(OperationType.LIST, path, currentUserId)
         )
     }
 
@@ -255,10 +283,12 @@ class BlueStreamRepository(
         return try {
             val cleanTitle = title.trim().take(120)
             val cleanDesc = description.trim().take(2000)
-            val cleanVideoUrl = videoUrl.trim().take(1000)
+            val cleanVideoUrl = videoUrl.trim().take(1500)
             val cleanCategory = if (category in UPLOAD_CATEGORIES) category else "Tech"
             val cleanVisibility = if (visibility == "private") "private" else "public"
             val cleanDuration = durationSeconds.coerceIn(0L, 43200L)
+            // Regular creators enter pending moderation before public publishing; Owner is pre-approved
+            val initialModerationStatus = if (isCurrentUserAdmin()) "approved" else "pending"
 
             require(cleanTitle.isNotEmpty()) { "Video title is required." }
             require(cleanVideoUrl.isNotEmpty()) { "Please select a video or paste a video URL." }
@@ -276,6 +306,7 @@ class BlueStreamRepository(
                 "videoUrl" to cleanVideoUrl,
                 "durationSeconds" to cleanDuration,
                 "visibility" to cleanVisibility,
+                "moderationStatus" to initialModerationStatus,
                 "featured" to false,
                 "viewsCount" to 0L,
                 "likesCount" to 0L,
@@ -287,12 +318,11 @@ class BlueStreamRepository(
                 payload["channelAvatarUrl"] = it.take(500)
             }
             thumbnailUrl?.takeIf { it.isNotBlank() }?.let {
-                payload["thumbnailUrl"] = it.take(1000)
+                payload["thumbnailUrl"] = it.take(1500)
             }
 
             docRef.set(payload).await()
 
-            // Best-effort increment channel videoCount
             runCatching {
                 db.collection("channels").document(uid).update(
                     mapOf(
@@ -332,6 +362,27 @@ class BlueStreamRepository(
                     "description" to cleanDesc,
                     "category" to cleanCategory,
                     "visibility" to cleanVisibility,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun moderateVideo(videoId: String, status: String): Result<Unit> {
+        val path = "videos/$videoId"
+        return try {
+            requireUserId()
+            require(isCurrentUserAdmin()) { "Only the platform owner can moderate videos." }
+            require(status in listOf("approved", "rejected", "pending")) { "Invalid moderation status." }
+            db.collection("videos").document(videoId).update(
+                mapOf(
+                    "moderationStatus" to status,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
@@ -389,7 +440,9 @@ class BlueStreamRepository(
     }
 
     override suspend fun incrementVideoView(video: Video): Result<Unit> {
-        if (video.visibility != "public" || video.id.isBlank()) return Result.success(Unit)
+        if (video.visibility != "public" || video.moderationStatus != "approved" || video.id.isBlank()) {
+            return Result.success(Unit)
+        }
         val path = "videos/${video.id}"
         return try {
             requireUserId()
@@ -411,9 +464,10 @@ class BlueStreamRepository(
         return try {
             val likeRef = db.collection("users").document(uid).collection("likes").document(video.id)
             val videoRef = db.collection("videos").document(video.id)
+            val canUpdatePublicCounter = video.visibility == "public" && video.moderationStatus == "approved"
             if (currentlyLiked) {
                 likeRef.delete().await()
-                if (video.visibility == "public" && video.likesCount > 0L) {
+                if (canUpdatePublicCounter && video.likesCount > 0L) {
                     runCatching { videoRef.update("likesCount", FieldValue.increment(-1)).await() }
                 }
             } else {
@@ -424,10 +478,10 @@ class BlueStreamRepository(
                     "createdAt" to FieldValue.serverTimestamp()
                 )
                 video.thumbnailUrl?.takeIf { it.isNotBlank() }?.let {
-                    payload["thumbnailUrl"] = it.take(1000)
+                    payload["thumbnailUrl"] = it.take(1500)
                 }
                 likeRef.set(payload).await()
-                if (video.visibility == "public") {
+                if (canUpdatePublicCounter) {
                     runCatching { videoRef.update("likesCount", FieldValue.increment(1)).await() }
                 }
             }
@@ -509,7 +563,7 @@ class BlueStreamRepository(
                     "createdAt" to FieldValue.serverTimestamp()
                 )
                 video.thumbnailUrl?.takeIf { it.isNotBlank() }?.let {
-                    payload["thumbnailUrl"] = it.take(1000)
+                    payload["thumbnailUrl"] = it.take(1500)
                 }
                 ref.set(payload).await()
             }
@@ -550,7 +604,7 @@ class BlueStreamRepository(
             }
             commentRef.set(payload).await()
 
-            if (video.visibility == "public") {
+            if (video.visibility == "public" && video.moderationStatus == "approved") {
                 runCatching {
                     db.collection("videos").document(video.id)
                         .update("commentsCount", FieldValue.increment(1))
@@ -574,7 +628,7 @@ class BlueStreamRepository(
                 .collection("comments").document(commentId)
                 .delete()
                 .await()
-            if (video.visibility == "public" && video.commentsCount > 0L) {
+            if (video.visibility == "public" && video.moderationStatus == "approved" && video.commentsCount > 0L) {
                 runCatching {
                     db.collection("videos").document(video.id)
                         .update("commentsCount", FieldValue.increment(-1))
@@ -586,6 +640,58 @@ class BlueStreamRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun reportVideo(video: Video, reason: String, details: String?): Result<Unit> {
+        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
+        var path = "reports"
+        return try {
+            val cleanReason = reason.trim().take(100)
+            require(cleanReason.isNotEmpty()) { "Please select a report reason." }
+            val reportRef = db.collection("reports").document()
+            path = reportRef.path
+            val payload = mutableMapOf<String, Any>(
+                "videoId" to video.id,
+                "videoTitle" to video.title.take(120),
+                "videoOwnerId" to video.ownerId,
+                "reporterId" to uid,
+                "reason" to cleanReason,
+                "status" to "open",
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            details?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                payload["details"] = it.take(500)
+            }
+            reportRef.set(payload).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, path)
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun updateReportStatus(reportId: String, status: String): Result<Unit> {
+        val path = "reports/$reportId"
+        return try {
+            requireUserId()
+            require(isCurrentUserAdmin()) { "Only the platform owner can resolve reports." }
+            require(status in listOf("resolved", "dismissed")) { "Invalid report status." }
+            db.collection("reports").document(reportId).update(
+                mapOf(
+                    "status" to status,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }

@@ -5,44 +5,15 @@
       "description": "Public creator channel profile (PII-free).",
       "type": "object",
       "properties": {
-        "ownerId": {
-          "type": "string",
-          "description": "Authenticated Firebase UID of the channel owner."
-        },
-        "displayName": {
-          "type": "string",
-          "description": "Public channel display name (1..60 chars)."
-        },
-        "handle": {
-          "type": "string",
-          "description": "Channel handle starting with @ (2..32 chars)."
-        },
-        "bio": {
-          "type": "string",
-          "description": "Channel bio/about text (0..300 chars)."
-        },
-        "avatarUrl": {
-          "type": "string",
-          "description": "Optional avatar photo URL (0..500 chars)."
-        },
-        "subscriberCount": {
-          "type": "integer",
-          "description": "Total subscriber count (>= 0)."
-        },
-        "videoCount": {
-          "type": "integer",
-          "description": "Total uploaded video count (>= 0)."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Creation timestamp written with FieldValue.serverTimestamp()."
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Last update timestamp written with FieldValue.serverTimestamp()."
-        }
+        "ownerId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "handle": { "type": "string" },
+        "bio": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "subscriberCount": { "type": "integer" },
+        "videoCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
         "ownerId",
@@ -57,81 +28,30 @@
     },
     "Video": {
       "title": "Video",
-      "description": "Uploaded social video entry in BlueStream.",
+      "description": "Uploaded online video entry with moderation workflow.",
       "type": "object",
       "properties": {
-        "ownerId": {
-          "type": "string",
-          "description": "Authenticated Firebase UID of the video creator."
-        },
-        "channelName": {
-          "type": "string",
-          "description": "Denormalized channel display name (1..60 chars)."
-        },
-        "channelHandle": {
-          "type": "string",
-          "description": "Denormalized channel handle (1..36 chars)."
-        },
-        "channelAvatarUrl": {
-          "type": "string",
-          "description": "Optional channel avatar URL (0..500 chars)."
-        },
-        "title": {
-          "type": "string",
-          "description": "Video title (1..120 chars)."
-        },
-        "description": {
-          "type": "string",
-          "description": "Video description (0..2000 chars)."
-        },
+        "ownerId": { "type": "string" },
+        "channelName": { "type": "string" },
+        "channelHandle": { "type": "string" },
+        "channelAvatarUrl": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
         "category": {
           "type": "string",
-          "enum": ["Tech", "Music", "Gaming", "Travel", "Education", "Vlogs", "Sports", "Shorts"],
-          "description": "Video category."
+          "enum": ["Tech", "Music", "Gaming", "Travel", "Education", "Vlogs", "Sports", "Shorts"]
         },
-        "videoUrl": {
-          "type": "string",
-          "description": "Playable video stream URL or device file URI (1..1000 chars)."
-        },
-        "thumbnailUrl": {
-          "type": "string",
-          "description": "Optional thumbnail URL, local file URI, or preset key (0..1000 chars)."
-        },
-        "durationSeconds": {
-          "type": "integer",
-          "description": "Video duration in seconds (0..43200)."
-        },
-        "visibility": {
-          "type": "string",
-          "enum": ["public", "private"],
-          "description": "Visibility of the video."
-        },
-        "featured": {
-          "type": "boolean",
-          "description": "Whether the platform owner featured this video."
-        },
-        "viewsCount": {
-          "type": "integer",
-          "description": "Total views (>= 0)."
-        },
-        "likesCount": {
-          "type": "integer",
-          "description": "Total likes (>= 0)."
-        },
-        "commentsCount": {
-          "type": "integer",
-          "description": "Total comments (>= 0)."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Creation timestamp written with FieldValue.serverTimestamp()."
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Last update timestamp written with FieldValue.serverTimestamp()."
-        }
+        "videoUrl": { "type": "string" },
+        "thumbnailUrl": { "type": "string" },
+        "durationSeconds": { "type": "integer" },
+        "visibility": { "type": "string", "enum": ["public", "private"] },
+        "moderationStatus": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "featured": { "type": "boolean" },
+        "viewsCount": { "type": "integer" },
+        "likesCount": { "type": "integer" },
+        "commentsCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
         "ownerId",
@@ -143,10 +63,37 @@
         "videoUrl",
         "durationSeconds",
         "visibility",
+        "moderationStatus",
         "featured",
         "viewsCount",
         "likesCount",
         "commentsCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VideoReport": {
+      "title": "VideoReport",
+      "description": "User-submitted report flagging a video for owner moderation.",
+      "type": "object",
+      "properties": {
+        "videoId": { "type": "string" },
+        "videoTitle": { "type": "string" },
+        "videoOwnerId": { "type": "string" },
+        "reporterId": { "type": "string" },
+        "reason": { "type": "string" },
+        "details": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "resolved", "dismissed"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "videoId",
+        "videoTitle",
+        "videoOwnerId",
+        "reporterId",
+        "reason",
+        "status",
         "createdAt",
         "updatedAt"
       ]
@@ -156,44 +103,15 @@
       "description": "User comment on a video.",
       "type": "object",
       "properties": {
-        "videoId": {
-          "type": "string",
-          "description": "Parent video document ID."
-        },
-        "authorId": {
-          "type": "string",
-          "description": "Authenticated Firebase UID of the commenter."
-        },
-        "authorName": {
-          "type": "string",
-          "description": "Display name of the commenter (1..60 chars)."
-        },
-        "authorAvatarUrl": {
-          "type": "string",
-          "description": "Optional commenter avatar URL (0..500 chars)."
-        },
-        "text": {
-          "type": "string",
-          "description": "Comment body text (1..600 chars)."
-        },
-        "likesCount": {
-          "type": "integer",
-          "description": "Comment likes (>= 0)."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Creation timestamp written with FieldValue.serverTimestamp()."
-        }
+        "videoId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorAvatarUrl": { "type": "string" },
+        "text": { "type": "string" },
+        "likesCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "videoId",
-        "authorId",
-        "authorName",
-        "text",
-        "likesCount",
-        "createdAt"
-      ]
+      "required": ["videoId", "authorId", "authorName", "text", "likesCount", "createdAt"]
     },
     "UserLike": {
       "title": "UserLike",
@@ -204,11 +122,7 @@
         "videoTitle": { "type": "string" },
         "channelName": { "type": "string" },
         "thumbnailUrl": { "type": "string" },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Written with FieldValue.serverTimestamp()."
-        }
+        "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["videoId", "videoTitle", "channelName", "createdAt"]
     },
@@ -221,11 +135,7 @@
         "channelName": { "type": "string" },
         "channelHandle": { "type": "string" },
         "channelAvatarUrl": { "type": "string" },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Written with FieldValue.serverTimestamp()."
-        }
+        "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["channelId", "channelName", "channelHandle", "createdAt"]
     },
@@ -239,11 +149,7 @@
         "channelName": { "type": "string" },
         "thumbnailUrl": { "type": "string" },
         "durationSeconds": { "type": "integer" },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Written with FieldValue.serverTimestamp()."
-        }
+        "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["videoId", "videoTitle", "channelName", "durationSeconds", "createdAt"]
     }
@@ -255,11 +161,15 @@
     },
     "/videos/{videoId}": {
       "schema": { "$ref": "#/entities/Video" },
-      "description": "Social video catalog supporting public feed, private drafts, and owner moderation."
+      "description": "Online video catalog with moderationStatus approval before public feed publishing."
     },
     "/videos/{videoId}/comments/{commentId}": {
       "schema": { "$ref": "#/entities/Comment" },
       "description": "Comments posted under a specific video."
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/VideoReport" },
+      "description": "User video reports for owner review and moderation."
     },
     "/users/{userId}/likes/{videoId}": {
       "schema": { "$ref": "#/entities/UserLike" },

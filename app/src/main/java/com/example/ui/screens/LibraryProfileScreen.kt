@@ -21,8 +21,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
@@ -57,6 +60,7 @@ import com.example.data.Channel
 import com.example.data.UiState
 import com.example.data.UserLike
 import com.example.data.Video
+import com.example.data.VideoReport
 import com.example.data.WatchLaterItem
 import com.example.ui.components.ChannelAvatar
 import com.example.ui.components.CompactUpNextCard
@@ -72,11 +76,17 @@ fun LibraryProfileScreen(
     isPlatformOwner: Boolean,
     myVideosState: UiState<List<Video>>,
     publicVideosState: UiState<List<Video>>,
+    pendingModerationVideos: List<Video>,
+    openReports: List<VideoReport>,
     watchLaterItems: List<WatchLaterItem>,
     likedItems: List<UserLike>,
     onVideoClick: (Video) -> Unit,
     onDeleteVideo: (Video) -> Unit,
     onToggleFeatured: (Video) -> Unit,
+    onApproveVideo: (Video) -> Unit,
+    onRejectVideo: (Video) -> Unit,
+    onDismissReport: (String) -> Unit,
+    onRemoveReportedVideo: (VideoReport) -> Unit,
     onUpdateChannelProfile: (displayName: String, handle: String, bio: String) -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier
@@ -271,9 +281,129 @@ fun LibraryProfileScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            StatBadge(label = "Platform Videos", value = allPublicVideos.size.toString(), modifier = Modifier.weight(1f))
-                            StatBadge(label = "Total Views", value = formatCount(totalViews), modifier = Modifier.weight(1f))
-                            StatBadge(label = "Total Likes", value = formatCount(totalLikes), modifier = Modifier.weight(1f))
+                            StatBadge(label = "Live Videos", value = allPublicVideos.size.toString(), modifier = Modifier.weight(1f))
+                            StatBadge(label = "Pending", value = pendingModerationVideos.size.toString(), modifier = Modifier.weight(1f))
+                            StatBadge(label = "Reports", value = openReports.size.toString(), modifier = Modifier.weight(1f))
+                        }
+
+                        // Pending Moderation Queue (videos awaiting approval before public feed)
+                        Text(
+                            text = "Moderation Queue (${pendingModerationVideos.size})",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = BlueStreamOwnerGold
+                        )
+                        if (pendingModerationVideos.isEmpty()) {
+                            Text(
+                                text = "All uploaded videos have been reviewed.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF9CB3D9)
+                            )
+                        } else {
+                            pendingModerationVideos.forEach { vid ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color.Black.copy(alpha = 0.30f))
+                                        .clickable { onVideoClick(vid) }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = vid.title,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${vid.channelName} • ${vid.category} • Pending",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFFFDE68A)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { onApproveVideo(vid) },
+                                        modifier = Modifier.testTag("owner_approve_${vid.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.CheckCircle,
+                                            contentDescription = "Approve Video",
+                                            tint = Color(0xFF4ADE80)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { onRejectVideo(vid) },
+                                        modifier = Modifier.testTag("owner_reject_${vid.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Reject Video",
+                                            tint = Color(0xFFF87171)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Reported Videos Queue
+                        if (openReports.isNotEmpty()) {
+                            Text(
+                                text = "Reported Videos (${openReports.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = Color(0xFFFCA5A5)
+                            )
+                            openReports.forEach { report ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0x33EF4444))
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Flag,
+                                        contentDescription = null,
+                                        tint = Color(0xFFF87171),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = report.videoTitle,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${report.reason}${if (!report.details.isNullOrBlank()) " — ${report.details}" else ""}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFFFECACA),
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { onDismissReport(report.id) },
+                                        modifier = Modifier.testTag("owner_dismiss_report_${report.id}")
+                                    ) {
+                                        Text("Dismiss", color = Color(0xFFCAE0FF))
+                                    }
+                                    IconButton(
+                                        onClick = { onRemoveReportedVideo(report) },
+                                        modifier = Modifier.testTag("owner_remove_reported_${report.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Delete,
+                                            contentDescription = "Remove Reported Video",
+                                            tint = Color(0xFFF87171)
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         if (allPublicVideos.isNotEmpty()) {
@@ -356,24 +486,43 @@ fun LibraryProfileScreen(
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             myVideos.forEach { vid ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    CompactUpNextCard(
-                                        video = vid,
-                                        onClick = { onVideoClick(vid) },
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    IconButton(
-                                        onClick = { onDeleteVideo(vid) },
-                                        modifier = Modifier.testTag("my_video_delete_${vid.id}")
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Delete,
-                                            contentDescription = "Delete video",
-                                            tint = MaterialTheme.colorScheme.error
+                                        CompactUpNextCard(
+                                            video = vid,
+                                            onClick = { onVideoClick(vid) },
+                                            modifier = Modifier.weight(1f)
                                         )
+                                        IconButton(
+                                            onClick = { onDeleteVideo(vid) },
+                                            modifier = Modifier.testTag("my_video_delete_${vid.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Delete,
+                                                contentDescription = "Delete video",
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                    if (vid.moderationStatus != "approved") {
+                                        val isRejected = vid.moderationStatus == "rejected"
+                                        Surface(
+                                            color = if (isRejected) MaterialTheme.colorScheme.errorContainer
+                                            else BlueStreamPrimary.copy(alpha = 0.18f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text(
+                                                text = if (isRejected) "Moderation: Rejected"
+                                                else "Moderation: Pending Owner Review",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (isRejected) MaterialTheme.colorScheme.error
+                                                else BlueStreamSecondary,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }

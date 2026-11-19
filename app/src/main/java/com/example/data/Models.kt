@@ -14,6 +14,13 @@ sealed interface UiState<out T> {
     data class Error(val message: String) : UiState<Nothing>
 }
 
+data class UploadTransferState(
+    val active: Boolean = false,
+    val progress: Float = 0f,
+    val stage: String = "",
+    val error: String? = null
+)
+
 val VIDEO_CATEGORIES = listOf(
     "All",
     "Tech",
@@ -27,6 +34,14 @@ val VIDEO_CATEGORIES = listOf(
 )
 
 val UPLOAD_CATEGORIES = VIDEO_CATEGORIES.filter { it != "All" }
+
+val REPORT_REASONS = listOf(
+    "Spam or misleading",
+    "Harassment or hate",
+    "Inappropriate content",
+    "Copyright issue",
+    "Other"
+)
 
 @Keep
 @IgnoreExtraProperties
@@ -58,10 +73,26 @@ data class Video(
     val thumbnailUrl: String? = null,
     val durationSeconds: Long = 0L,
     val visibility: String = "public",
+    val moderationStatus: String = "pending",
     val featured: Boolean = false,
     val viewsCount: Long = 0L,
     val likesCount: Long = 0L,
     val commentsCount: Long = 0L,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class VideoReport(
+    @DocumentId val id: String = "",
+    val videoId: String = "",
+    val videoTitle: String = "",
+    val videoOwnerId: String = "",
+    val reporterId: String = "",
+    val reason: String = "",
+    val details: String? = null,
+    val status: String = "open",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
