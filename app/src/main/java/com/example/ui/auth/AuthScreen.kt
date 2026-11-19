@@ -217,24 +217,6 @@ fun AuthScreen(
 
                 Spacer(modifier = Modifier.height(28.dp))
 
-                if (errorMessage != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 16.dp)
-                    ) {
-                        Text(
-                            text = errorMessage ?: "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFFCA5A5),
-                            modifier = Modifier.padding(12.dp),
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                }
-
                 Button(
                     onClick = {
                         errorMessage = null
@@ -297,6 +279,31 @@ fun AuthScreen(
                         Text(
                             text = "Sign in with Google",
                             style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                }
+
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        color = Color(0x33EF4444),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFFEF4444).copy(alpha = 0.65f),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .testTag("auth_error_message")
+                    ) {
+                        Text(
+                            text = errorMessage ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFFF6B6B),
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(12.dp),
+                            textAlign = TextAlign.Start
                         )
                     }
                 }
